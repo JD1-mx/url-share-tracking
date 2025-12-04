@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(./venv/bin/python3:*)"
+      "Bash(./venv/bin/python3:*)",
+      "Bash(find:*)",
+      "Bash(./venv/bin/pip install:*)"
     ],
     "deny": [],
     "ask": []

@@ -4,6 +4,7 @@ import folium
 from streamlit_folium import folium_static
 from datetime import datetime, timedelta
 import requests
+import pytz
 
 # Configure page
 st.set_page_config(
@@ -20,6 +21,9 @@ TENDERD_API_BASE_URL = "https://api.tenderd.com"
 TENDERD_ACCOUNT_ID = "Xv7pB1sVxPp0ioTyqYo7"
 TENDERD_GEO = "uae"
 
+# UAE Timezone (UTC+4)
+UAE_TZ = pytz.timezone('Asia/Dubai')
+
 # Get API key from secrets or environment variable
 try:
     TENDERD_API_KEY = st.secrets["TENDERD_API_KEY"]
@@ -30,6 +34,21 @@ except (FileNotFoundError, KeyError):
     if not TENDERD_API_KEY:
         st.error("⚠️ TENDERD_API_KEY not found. Please set it in .streamlit/secrets.toml or as an environment variable.")
         st.stop()
+
+def convert_to_uae_time(dt):
+    """
+    Convert a datetime object to UAE time (UTC+4).
+    If the datetime is naive (no timezone), assumes it's UTC.
+    """
+    if dt is None:
+        return None
+
+    # If datetime is timezone-naive, assume it's UTC
+    if dt.tzinfo is None:
+        dt = pytz.UTC.localize(dt)
+
+    # Convert to UAE timezone
+    return dt.astimezone(UAE_TZ)
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def fetch_shared_vehicles():
@@ -167,12 +186,13 @@ def fetch_device_history(device_id, start_time):
             else:
                 continue
 
-            # Parse datetime
+            # Parse datetime and convert to UAE time
             dt = pd.to_datetime(item.get("datetime"))
+            dt_uae = convert_to_uae_time(dt)
 
             history.append({
                 "device_id": device_id,
-                "timestamp": dt,
+                "timestamp": dt_uae,
                 "latitude": latitude,
                 "longitude": longitude,
                 "speed": item.get("speed", 0),
@@ -274,7 +294,8 @@ with st.sidebar:
 
     st.markdown("### System Info")
     st.markdown(f"**Total Shared Vehicles:** {len(SHARED_VEHICLES)}")
-    st.markdown(f"**Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    current_time_uae = datetime.now()
+    st.markdown(f"**Last Updated:** {current_time_uae.strftime('%Y-%m-%d %H:%M:%S')} UAE")
 
     # Add refresh button
     if st.button("🔄 Refresh Data"):
