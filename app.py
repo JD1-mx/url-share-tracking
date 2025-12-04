@@ -18,8 +18,18 @@ WEBHOOK_URL = "https://tenderd.app.n8n.cloud/webhook/89b4621a-5e8a-4a4b-a2ed-40f
 # Tenderd API Configuration
 TENDERD_API_BASE_URL = "https://api.tenderd.com"
 TENDERD_ACCOUNT_ID = "Xv7pB1sVxPp0ioTyqYo7"
-TENDERD_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOiJYdjdwQjFzVnhQcDBpb1R5cVlvNyIsImdlbyI6InVhZSIsImp0aSI6ImNmOTg3MjEyLTI2ZWQtNDdiOS04NDdlLTBiZGFjYTczZTcxMiIsImlhdCI6MTc2NDg0MTU5N30.zYzJtW4cWo7Xv9ouXWuXjP5KhEkosw6cIN-T5qFf-xk"
 TENDERD_GEO = "uae"
+
+# Get API key from secrets or environment variable
+try:
+    TENDERD_API_KEY = st.secrets["TENDERD_API_KEY"]
+except (FileNotFoundError, KeyError):
+    # Fallback to environment variable if secrets file doesn't exist
+    import os
+    TENDERD_API_KEY = os.getenv("TENDERD_API_KEY", "")
+    if not TENDERD_API_KEY:
+        st.error("⚠️ TENDERD_API_KEY not found. Please set it in .streamlit/secrets.toml or as an environment variable.")
+        st.stop()
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def fetch_shared_vehicles():

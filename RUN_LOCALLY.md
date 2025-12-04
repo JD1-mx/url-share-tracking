@@ -17,17 +17,26 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. (Optional) Test the webhook connection
+### 4. Set up secrets (API Key)
+```bash
+# Copy the secrets template
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+
+# Edit the file and add your actual API key
+# See SECRETS_SETUP.md for detailed instructions
+```
+
+### 5. (Optional) Test the webhook connection
 ```bash
 python test_sheets.py
 ```
 
-### 5. Run the Streamlit app
+### 6. Run the Streamlit app
 ```bash
 streamlit run app.py
 ```
 
-### 6. Access the app
+### 7. Access the app
 The app will automatically open in your browser at `http://localhost:8501`
 
 If it doesn't open automatically, you can manually navigate to that URL.
