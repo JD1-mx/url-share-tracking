@@ -3,8 +3,7 @@ import pandas as pd
 import folium
 from streamlit_folium import folium_static
 from datetime import datetime, timedelta
-import random
-import numpy as np
+import requests
 
 # Configure page
 st.set_page_config(
@@ -13,58 +12,178 @@ st.set_page_config(
     layout="wide"
 )
 
-# Sample Google Sheet data (in production, this would be fetched from the actual sheet)
-# Sheet URL: https://docs.google.com/spreadsheets/d/1v6nVIvSm-Lg685aYponZVnopSmQYGdyvpjXpY39fQ3c/edit?usp=sharing
-SHARED_VEHICLES = {
-    "IFFCO-001": {"plate_number": "DXB-12345", "time_added": "2025-12-03 08:00:00"},
-    "IFFCO-002": {"plate_number": "DXB-67890", "time_added": "2025-12-03 09:30:00"},
-    "IFFCO-003": {"plate_number": "AD-54321", "time_added": "2025-12-03 10:15:00"},
-    "IFFCO-004": {"plate_number": "SHJ-98765", "time_added": "2025-12-03 11:45:00"},
-}
+# Webhook URL for fetching shared vehicles
+WEBHOOK_URL = "https://tenderd.app.n8n.cloud/webhook/89b4621a-5e8a-4a4b-a2ed-40f1aaf2e2cf"
 
-def generate_dummy_device_history(device_id, start_time):
+# Tenderd API Configuration
+TENDERD_API_BASE_URL = "https://api.tenderd.com"
+TENDERD_ACCOUNT_ID = "Xv7pB1sVxPp0ioTyqYo7"
+TENDERD_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOiJYdjdwQjFzVnhQcDBpb1R5cVlvNyIsImdlbyI6InVhZSIsImp0aSI6ImNmOTg3MjEyLTI2ZWQtNDdiOS04NDdlLTBiZGFjYTczZTcxMiIsImlhdCI6MTc2NDg0MTU5N30.zYzJtW4cWo7Xv9ouXWuXjP5KhEkosw6cIN-T5qFf-xk"
+TENDERD_GEO = "uae"
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def fetch_shared_vehicles():
     """
-    Generate dummy device history data for a vehicle.
-    Creates a realistic path with GPS coordinates.
+    Fetch shared vehicles data from webhook.
+    Returns a dictionary in the format: {device_id: {plate_number, time_added}}
     """
-    # Starting point (Dubai area coordinates as example)
-    start_lat = 25.2048
-    start_lon = 55.2708
+    try:
+        # Fetch data from webhook
+        response = requests.get(WEBHOOK_URL, timeout=10)
+        response.raise_for_status()
 
-    # Parse start time
-    if isinstance(start_time, str):
-        start_dt = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-    else:
-        start_dt = start_time
+        # Parse JSON response
+        vehicles_data = response.json()
 
-    # Generate path data
-    history = []
-    current_lat = start_lat
-    current_lon = start_lon
-    current_time = start_dt
+        # Validate response is a list
+        if not isinstance(vehicles_data, list):
+            raise ValueError(f"Expected webhook to return a list, got {type(vehicles_data)}")
 
-    # Generate 50 points representing movement over time
-    num_points = 50
-    for i in range(num_points):
-        # Simulate realistic vehicle movement
-        # Move in a general direction with some variance
-        current_lat += random.uniform(-0.005, 0.01)  # Northward bias
-        current_lon += random.uniform(-0.005, 0.01)  # Eastward bias
-        current_time += timedelta(minutes=random.randint(5, 15))
+        # Convert list to dictionary format
+        shared_vehicles = {}
+        for item in vehicles_data:
+            # Validate required fields
+            if not all(key in item for key in ['device_id', 'plate_number', 'time_added']):
+                st.warning(f"Skipping item with missing fields: {item}")
+                continue
 
-        # Simulate speed (km/h)
-        speed = random.uniform(20, 80)
+            # Skip rows with empty/null data
+            device_id = item.get('device_id')
+            plate_number = item.get('plate_number')
+            time_added = item.get('time_added')
 
-        history.append({
-            "device_id": device_id,
-            "timestamp": current_time,
-            "latitude": current_lat,
-            "longitude": current_lon,
-            "speed": speed,
-            "heading": random.uniform(0, 360)
-        })
+            if not device_id or not plate_number or not time_added:
+                continue
 
-    return pd.DataFrame(history)
+            # Convert to strings and strip whitespace
+            device_id = str(device_id).strip()
+            shared_vehicles[device_id] = {
+                "plate_number": str(plate_number).strip(),
+                "time_added": str(time_added).strip()
+            }
+
+        if not shared_vehicles:
+            st.warning("No valid vehicle data found from webhook")
+
+        return shared_vehicles
+
+    except requests.RequestException as e:
+        st.error(f"Network error while fetching webhook data: {str(e)}")
+        return {}
+    except ValueError as e:
+        st.error(f"Data format error: {str(e)}")
+        return {}
+    except Exception as e:
+        st.error(f"Unexpected error fetching data from webhook: {str(e)}")
+        return {}
+
+def fetch_device_history(device_id, start_time):
+    """
+    Fetch real device history data from Tenderd API.
+    """
+    try:
+        # Parse start time - handle multiple formats
+        if isinstance(start_time, str):
+            # Try different datetime formats
+            for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"]:
+                try:
+                    start_dt = datetime.strptime(start_time.strip(), fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                # If no format matches, try a simple parse
+                try:
+                    start_dt = pd.to_datetime(start_time)
+                except:
+                    st.error(f"Could not parse start time: {start_time}")
+                    return pd.DataFrame()
+        else:
+            start_dt = start_time
+
+        # Set end time to now
+        end_dt = datetime.now()
+
+        # Format dates for API (ISO format with timezone)
+        start_date_str = start_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        end_date_str = end_dt.strftime("%Y-%m-%dT%H:%M:%S.999Z")
+
+        # Build API URL
+        url = f"{TENDERD_API_BASE_URL}/telematics/devices/{device_id}/histories"
+        params = {
+            "start_date": start_date_str,
+            "end_date": end_date_str,
+            "geo": TENDERD_GEO,
+            "projection": '["fuel_level","ble_temperatures","speed","direction"]',
+            "key": TENDERD_API_KEY,
+            "allData": "true",
+            "page": "1",
+            "limit": "10000"
+        }
+
+        # Set headers
+        headers = {
+            "accept": "*/*",
+            "accountid": TENDERD_ACCOUNT_ID,
+            "geo": TENDERD_GEO,
+            "content-type": "application/json"
+        }
+
+        # Make API request
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+
+        # Parse response
+        response_data = response.json()
+
+        # Handle response structure - the /histories endpoint returns {data: [...]}
+        if isinstance(response_data, dict) and "data" in response_data:
+            data = response_data["data"]
+        else:
+            data = response_data
+
+        if not data or len(data) == 0:
+            st.warning(f"No history data found for device {device_id}")
+            return pd.DataFrame()
+
+        # Transform API response to DataFrame format
+        history = []
+        for item in data:
+            # Extract coordinates from location object
+            coordinates = item.get("location", {}).get("coordinates", [])
+            if len(coordinates) >= 2:
+                latitude = coordinates[0]
+                longitude = coordinates[1]
+            else:
+                continue
+
+            # Parse datetime
+            dt = pd.to_datetime(item.get("datetime"))
+
+            history.append({
+                "device_id": device_id,
+                "timestamp": dt,
+                "latitude": latitude,
+                "longitude": longitude,
+                "speed": item.get("speed", 0),
+                "heading": item.get("direction", 0),
+                "ignition_status": item.get("ignition_status", False),
+                "distance": item.get("distance", 0)
+            })
+
+        df = pd.DataFrame(history)
+
+        if df.empty:
+            st.warning(f"No valid location data for device {device_id}")
+
+        return df
+
+    except requests.RequestException as e:
+        st.error(f"API error fetching device history: {str(e)}")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error processing device history: {str(e)}")
+        return pd.DataFrame()
 
 def create_map(device_history_df, device_id, plate_number):
     """
@@ -131,6 +250,10 @@ def create_map(device_history_df, device_id, plate_number):
 st.title("🚛 Vehicle Tracking System")
 st.markdown("---")
 
+# Fetch shared vehicles from webhook
+with st.spinner("Loading vehicle data..."):
+    SHARED_VEHICLES = fetch_shared_vehicles()
+
 # Sidebar
 with st.sidebar:
     st.header("About")
@@ -143,6 +266,11 @@ with st.sidebar:
     st.markdown(f"**Total Shared Vehicles:** {len(SHARED_VEHICLES)}")
     st.markdown(f"**Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+    # Add refresh button
+    if st.button("🔄 Refresh Data"):
+        st.cache_data.clear()
+        st.rerun()
+
 # Main content
 if not SHARED_VEHICLES:
     st.warning("No vehicles are currently being shared for tracking.")
@@ -153,15 +281,35 @@ else:
         for device_id, info in SHARED_VEHICLES.items()
     ]
 
+    # Check for device_id in query parameters
+    query_params = st.query_params
+    url_device_id = query_params.get("device_id", None)
+
+    # Determine initial index based on URL parameter
+    initial_index = 0
+    if url_device_id and url_device_id in SHARED_VEHICLES:
+        # Find the index of the device in the options list
+        for idx, option in enumerate(vehicle_options):
+            if option.startswith(url_device_id):
+                initial_index = idx
+                break
+
     selected_option = st.selectbox(
         "Select a vehicle to track:",
         options=vehicle_options,
-        index=0
+        index=initial_index
     )
 
     # Extract device_id from selection
     selected_device_id = selected_option.split(" - ")[0]
     vehicle_info = SHARED_VEHICLES[selected_device_id]
+
+    # Update URL query parameter when selection changes
+    if query_params.get("device_id") != selected_device_id:
+        st.query_params["device_id"] = selected_device_id
+
+    # Display shareable link
+    st.info(f"📋 **Share this vehicle:** `?device_id={selected_device_id}`")
 
     # Display vehicle info
     col1, col2, col3 = st.columns(3)
@@ -174,9 +322,9 @@ else:
 
     st.markdown("---")
 
-    # Generate device history
-    with st.spinner("Loading vehicle location history..."):
-        device_history = generate_dummy_device_history(
+    # Fetch device history from Tenderd API
+    with st.spinner("Loading vehicle location history from Tenderd API..."):
+        device_history = fetch_device_history(
             selected_device_id,
             vehicle_info['time_added']
         )
