@@ -108,7 +108,7 @@ def fetch_shared_vehicles():
 
 def fetch_device_history(device_id, start_time):
     """
-    Fetch real device history data from Tenderd API.
+    Fetch real device history data from Tenderd API with pagination.
     """
     try:
         # Parse start time - handle multiple formats
@@ -139,16 +139,6 @@ def fetch_device_history(device_id, start_time):
 
         # Build API URL
         url = f"{TENDERD_API_BASE_URL}/telematics/devices/{device_id}/histories"
-        params = {
-            "start_date": start_date_str,
-            "end_date": end_date_str,
-            "geo": TENDERD_GEO,
-            "projection": '["fuel_level","ble_temperatures","speed","direction"]',
-            "key": TENDERD_API_KEY,
-            "allData": "true",
-            "page": "1",
-            "limit": "10000"
-        }
 
         # Set headers
         headers = {
@@ -158,26 +148,58 @@ def fetch_device_history(device_id, start_time):
             "content-type": "application/json"
         }
 
-        # Make API request
-        response = requests.get(url, params=params, headers=headers, timeout=30)
-        response.raise_for_status()
+        # Pagination setup
+        page = 1
+        limit = 10000
+        all_data = []
 
-        # Parse response
-        response_data = response.json()
+        # Fetch all pages
+        while True:
+            params = {
+                "start_date": start_date_str,
+                "end_date": end_date_str,
+                "geo": TENDERD_GEO,
+                "projection": '["fuel_level","ble_temperatures","speed","direction"]',
+                "key": TENDERD_API_KEY,
+                "allData": "true",
+                "page": str(page),
+                "limit": str(limit)
+            }
 
-        # Handle response structure - the /histories endpoint returns {data: [...]}
-        if isinstance(response_data, dict) and "data" in response_data:
-            data = response_data["data"]
-        else:
-            data = response_data
+            # Make API request
+            response = requests.get(url, params=params, headers=headers, timeout=30)
+            response.raise_for_status()
 
-        if not data or len(data) == 0:
+            # Parse response
+            response_data = response.json()
+
+            # Handle response structure - the /histories endpoint returns {data: [...]}
+            if isinstance(response_data, dict) and "data" in response_data:
+                data = response_data["data"]
+            else:
+                data = response_data
+
+            # If no data in this page, we're done
+            if not data or len(data) == 0:
+                break
+
+            # Add data from this page
+            all_data.extend(data)
+
+            # If we got fewer records than the limit, we've reached the last page
+            if len(data) < limit:
+                break
+
+            # Move to next page
+            page += 1
+
+        if not all_data or len(all_data) == 0:
             st.warning(f"No history data found for device {device_id}")
             return pd.DataFrame()
 
         # Transform API response to DataFrame format
         history = []
-        for item in data:
+        for item in all_data:
             # Extract coordinates from location object
             coordinates = item.get("location", {}).get("coordinates", [])
             if len(coordinates) >= 2:
@@ -294,7 +316,7 @@ with st.sidebar:
 
     st.markdown("### System Info")
     st.markdown(f"**Total Shared Vehicles:** {len(SHARED_VEHICLES)}")
-    current_time_uae = datetime.now()
+    current_time_uae = datetime.now(UAE_TZ)
     st.markdown(f"**Last Updated:** {current_time_uae.strftime('%Y-%m-%d %H:%M:%S')} UAE")
 
     # Add refresh button
