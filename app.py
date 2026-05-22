@@ -166,9 +166,18 @@ def fetch_device_history(device_id, start_time):
                 "limit": str(limit)
             }
 
-            # Make API request
-            response = requests.get(url, params=params, headers=headers, timeout=30)
-            response.raise_for_status()
+            # Make API request with one retry on transient connection failures
+            last_exc = None
+            for attempt in range(2):
+                try:
+                    response = requests.get(url, params=params, headers=headers, timeout=30)
+                    response.raise_for_status()
+                    last_exc = None
+                    break
+                except (requests.ConnectionError, requests.Timeout) as e:
+                    last_exc = e
+            if last_exc is not None:
+                raise last_exc
 
             # Parse response
             response_data = response.json()
@@ -382,59 +391,65 @@ else:
             vehicle_info['time_added']
         )
 
-    # Create two columns for map and data
-    col_map, col_data = st.columns([2, 1])
-
-    with col_map:
-        st.subheader("Vehicle Path")
-        vehicle_map = create_map(
-            device_history,
-            selected_device_id,
-            vehicle_info['plate_number']
+    if device_history.empty:
+        st.warning(
+            "No location history is available for this vehicle right now. "
+            "The tracking service may be temporarily unavailable — please try again in a moment."
         )
-        if vehicle_map:
-            folium_static(vehicle_map, width=800, height=600)
+    else:
+        # Create two columns for map and data
+        col_map, col_data = st.columns([2, 1])
 
-    with col_data:
-        st.subheader("Statistics")
+        with col_map:
+            st.subheader("Vehicle Path")
+            vehicle_map = create_map(
+                device_history,
+                selected_device_id,
+                vehicle_info['plate_number']
+            )
+            if vehicle_map:
+                folium_static(vehicle_map, width=800, height=600)
 
-        # Calculate statistics
-        total_points = len(device_history)
-        avg_speed = device_history['speed'].mean()
-        max_speed = device_history['speed'].max()
-        time_span = (device_history['timestamp'].max() - device_history['timestamp'].min())
+        with col_data:
+            st.subheader("Statistics")
 
-        st.metric("Total Data Points", total_points)
-        st.metric("Average Speed", f"{avg_speed:.1f} km/h")
-        st.metric("Max Speed", f"{max_speed:.1f} km/h")
-        st.metric("Time Span", str(time_span).split('.')[0])
+            # Calculate statistics
+            total_points = len(device_history)
+            avg_speed = device_history['speed'].mean()
+            max_speed = device_history['speed'].max()
+            time_span = (device_history['timestamp'].max() - device_history['timestamp'].min())
 
-        st.markdown("---")
-        st.subheader("Recent Locations")
+            st.metric("Total Data Points", total_points)
+            st.metric("Average Speed", f"{avg_speed:.1f} km/h")
+            st.metric("Max Speed", f"{max_speed:.1f} km/h")
+            st.metric("Time Span", str(time_span).split('.')[0])
 
-        # Show last 5 locations
-        recent_data = device_history.tail(5)[['timestamp', 'latitude', 'longitude', 'speed']].copy()
-        recent_data['speed'] = recent_data['speed'].apply(lambda x: f"{x:.1f} km/h")
-        recent_data['timestamp'] = recent_data['timestamp'].dt.strftime('%H:%M:%S')
+            st.markdown("---")
+            st.subheader("Recent Locations")
 
-        st.dataframe(
-            recent_data,
-            hide_index=True,
-            use_container_width=True
-        )
+            # Show last 5 locations
+            recent_data = device_history.tail(5)[['timestamp', 'latitude', 'longitude', 'speed']].copy()
+            recent_data['speed'] = recent_data['speed'].apply(lambda x: f"{x:.1f} km/h")
+            recent_data['timestamp'] = recent_data['timestamp'].dt.strftime('%H:%M:%S')
 
-    # Expandable section for full data
-    with st.expander("View Full Location History"):
-        st.dataframe(
-            device_history.style.format({
-                'speed': '{:.1f} km/h',
-                'heading': '{:.1f}°',
-                'latitude': '{:.6f}',
-                'longitude': '{:.6f}'
-            }),
-            use_container_width=True,
-            height=400
-        )
+            st.dataframe(
+                recent_data,
+                hide_index=True,
+                use_container_width=True
+            )
+
+        # Expandable section for full data
+        with st.expander("View Full Location History"):
+            st.dataframe(
+                device_history.style.format({
+                    'speed': '{:.1f} km/h',
+                    'heading': '{:.1f}°',
+                    'latitude': '{:.6f}',
+                    'longitude': '{:.6f}'
+                }),
+                use_container_width=True,
+                height=400
+            )
 
 # Footer
 st.markdown("---")
