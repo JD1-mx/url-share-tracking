@@ -17,7 +17,7 @@ st.set_page_config(
 WEBHOOK_URL = "https://tenderd.app.n8n.cloud/webhook/89b4621a-5e8a-4a4b-a2ed-40f1aaf2e2cf"
 
 # Tenderd API Configuration
-TENDERD_API_BASE_URL = "https://api.tenderd.com"
+TENDERD_API_BASE_URL = "https://telematics-svc-dr.tenderd.io"
 TENDERD_ACCOUNT_ID = "Xv7pB1sVxPp0ioTyqYo7"
 TENDERD_GEO = "uae"
 
