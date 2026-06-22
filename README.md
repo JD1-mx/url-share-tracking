@@ -1,6 +1,6 @@
 # Vehicle Tracking System
 
-A Streamlit app that lets **Intergolf** share a live tracking link with their customers (e.g. **DHL**), so the customer can see where the Intergolf vehicle handling their job is at any time — without giving them access to Tenderd directly.
+A Streamlit app that lets **Intergulf** share a live tracking link with their customers (e.g. **DHL**), so the customer can see where the Intergolf vehicle handling their job is at any time — without giving them access to Tenderd directly.
 
 **Production URL:** https://track-with-tenderd.streamlit.app/
 **Shareable deep-link format:** `https://track-with-tenderd.streamlit.app/?device_id=<DEVICE_ID>`
