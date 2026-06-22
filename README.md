@@ -1,9 +1,129 @@
 # Vehicle Tracking System
 
-A Streamlit app that visualizes the recent path of Tenderd vehicles on an interactive map. The list of currently-tracked vehicles is managed in an **n8n workflow** (start/stop sharing forms); the app reads that list via a webhook and fetches per-vehicle GPS history from the **Tenderd telematics API**.
+A Streamlit app that lets **Intergolf** share a live tracking link with their customers (e.g. **DHL**), so the customer can see where the Intergolf vehicle handling their job is at any time — without giving them access to Tenderd directly.
 
 **Production URL:** https://track-with-tenderd.streamlit.app/
 **Shareable deep-link format:** `https://track-with-tenderd.streamlit.app/?device_id=<DEVICE_ID>`
+
+---
+
+## Why this exists (context)
+
+Intergolf runs vehicles on behalf of multiple customers, and the assignment of "which vehicle is on which customer's job" changes often. When DHL (or any other Intergolf customer) wants visibility into the vehicle running *their* shipment, Intergolf needs a way to:
+
+1. Decide *this* specific vehicle is the one DHL should see.
+2. Decide *from when* it should be visible (usually the moment the job starts).
+3. Share a single URL with DHL that just works — no login, no Tenderd access.
+4. Pull that vehicle off the share later, once the job is over.
+
+This app is the customer-facing surface of that flow. The decision of *which vehicles are currently shared* is **not** managed here — it's managed by Intergolf in a spreadsheet, glued to this app by an n8n workflow.
+
+---
+
+## End-to-end flow
+
+There are two people in the loop: **the Intergolf operator** (manages the list) and **the customer** (consumes the link).
+
+### Intergolf operator — managing the shared list
+
+1. Operator opens **Intergolf's fleet spreadsheet** (referenced from inside the n8n workflow below — *do not* hardcode it elsewhere; treat n8n as the source of truth).
+2. The sheet has one row per vehicle Intergolf operates, with at least:
+   - `device_id` — the Tenderd device identifier.
+   - `plate_number` — the human-readable plate.
+   - `time_added` — the moment from which the vehicle should start being visible to the customer (this also becomes the lower bound of the location history the customer sees).
+   - Plus whatever column the n8n workflow uses to mark a row as "active / currently shared". Check the workflow node configuration if you need the exact column name.
+3. To **start sharing** a vehicle: the operator marks it active in the sheet and sets `time_added` to roughly the job start time.
+4. To **stop sharing**: the operator un-marks the row. The vehicle disappears from the dropdown (and any existing shareable link stops resolving) on the app's next webhook refresh.
+
+### Customer (e.g. DHL) — consuming the link
+
+1. Operator copies the share URL from the app — either by selecting the vehicle and clicking **Copy link**, or by constructing `…/?device_id=<id>` directly.
+2. Operator sends it to the customer (email, Slack, WhatsApp — it's just a URL).
+3. Customer opens the URL. The app:
+   - Picks up `device_id` from the query string and pre-selects that vehicle.
+   - Shows the vehicle's path from `time_added` until *now*, with the truck icon at the current location and a heading-aware directional peak.
+   - Updates "Last Updated" each time the page is refreshed.
+4. If the operator later removes the vehicle from the list, opening the same link will fall back to whatever the first vehicle in the list is (or show "No vehicles" if the list is empty). The vehicle simply stops being accessible.
+
+### What happens under the hood when the link is opened
+
+```
+        ┌────────────────────────────────────────────────────────────────┐
+        │  Customer (DHL) browser                                        │
+        │  https://track-with-tenderd.streamlit.app/?device_id=…         │
+        └────────────────────────────────────────────────────────────────┘
+                                  │
+                                  │ 1. page load
+                                  ▼
+        ┌────────────────────────────────────────────────────────────────┐
+        │  Streamlit app (this repo)                                     │
+        │                                                                │
+        │  fetch_shared_vehicles()  ─── GET ──▶  n8n webhook             │
+        │                                                                │
+        │  (then for the selected device_id)                             │
+        │  fetch_device_history()   ─── GET ──▶  Tenderd /histories      │
+        └────────────────────────────────────────────────────────────────┘
+                       │                                  │
+                       │                                  │
+                       ▼                                  ▼
+        ┌──────────────────────────────┐   ┌──────────────────────────────┐
+        │  n8n workflow                │   │  Tenderd telematics API      │
+        │  • triggered by the webhook  │   │  • returns GPS pings between │
+        │  • reads Intergolf's sheet   │   │    time_added and now        │
+        │  • filters to active rows    │   │  • paginated                 │
+        │  • returns [{device_id,      │   └──────────────────────────────┘
+        │    plate_number, time_added}]│
+        └──────────────────────────────┘
+```
+
+The webhook response is cached in Streamlit for **5 minutes** (`@st.cache_data(ttl=300)`). The sidebar **Refresh Data** button calls `st.cache_data.clear()` and forces an immediate re-fetch — useful right after an operator updates the sheet.
+
+---
+
+## Integrations
+
+### 1. n8n workflow — source of the shared-vehicle list
+
+The list of vehicles currently visible in the app is decided by an n8n workflow. The workflow:
+
+- Is triggered by a GET webhook (called every time the Streamlit app fetches the list).
+- Reads Intergolf's spreadsheet.
+- Filters down to the rows the operator has marked active.
+- Returns `[{device_id, plate_number, time_added}, …]` as JSON.
+
+**Workflow URL:** https://tenderd-io.app.n8n.cloud/workflow/mI5H7h3aHDQ4bHAQ
+
+Open the workflow when you need to:
+
+- Find out which spreadsheet is being read, or change which one.
+- Adjust which column marks a row as active.
+- Rename / re-map columns before they reach the app.
+- Rotate the webhook URL (after which **update `WEBHOOK_URL` in [`app.py`](app.py)** to match).
+
+**Webhook contract.** The app expects a JSON array of objects with these fields:
+
+```json
+[
+  {
+    "device_id":    "ds5xDNtfTGrkdKebivub",
+    "plate_number": "DXB /10808",
+    "time_added":   "2025-12-03 8:00:00"
+  }
+]
+```
+
+Any extra fields are ignored. Rows missing any of these three fields are silently skipped.
+
+### 2. Tenderd telematics API — vehicle GPS history
+
+For each selected vehicle, the app calls Tenderd to get the location history from `time_added` up to now.
+
+- **Base URL:** `https://telematics-svc-dr.tenderd.io`
+- **Endpoint:** `GET /telematics/devices/{device_id}/histories`
+- **Auth:** API key passed as the `key` query parameter; `accountid` and `geo` passed as headers.
+- **Projection used:** `["fuel_level","ble_temperatures","speed","direction"]`
+- **Pagination:** the app pages through results in 10,000-record chunks until an empty or short page is returned.
+- **Where it's wired in code:** `TENDERD_API_BASE_URL`, `TENDERD_ACCOUNT_ID`, `TENDERD_GEO` constants in [`app.py`](app.py). The API key is read from secrets (`TENDERD_API_KEY`).
 
 ---
 
@@ -17,48 +137,6 @@ A Streamlit app that visualizes the recent path of Tenderd vehicles on an intera
 - **Python 3.13** on Streamlit Cloud; 3.8+ locally.
 
 All dependencies are pinned by name in [`requirements.txt`](requirements.txt).
-
----
-
-## Integrations
-
-### 1. n8n workflow — source of the shared-vehicle list
-
-The list of vehicles currently being tracked is **not stored in this repo**. It is managed by an n8n workflow that exposes a GET webhook. The app polls that webhook (cached 5 min) and renders the results in the dropdown.
-
-- **n8n workflow:** https://tenderd-io.app.n8n.cloud/workflow/mI5H7h3aHDQ4bHAQ
-  Open this workflow to:
-  - See / edit the start-sharing form (adds a vehicle to the list).
-  - See / edit the stop-sharing form (removes a vehicle).
-  - Inspect the underlying data store (currently a Google Sheet — referenced inside the workflow, **do not duplicate the link here**; treat n8n as the source of truth).
-  - Update what fields the webhook returns.
-
-- **Webhook contract.** The app expects a JSON array of objects with these fields:
-
-  ```json
-  [
-    {
-      "device_id":    "ds5xDNtfTGrkdKebivub",
-      "plate_number": "DXB /10808",
-      "time_added":   "2025-12-03 8:00:00"
-    }
-  ]
-  ```
-
-  Any extra fields are ignored. Rows missing any of these three fields are silently skipped.
-
-- **Where it's wired in code:** `WEBHOOK_URL` constant near the top of [`app.py`](app.py). If the webhook URL ever rotates, update this constant.
-
-### 2. Tenderd telematics API — vehicle GPS history
-
-For each selected vehicle, the app calls Tenderd's telematics service to get the location history from `time_added` up to now.
-
-- **Base URL:** `https://telematics-svc-dr.tenderd.io`
-- **Endpoint:** `GET /telematics/devices/{device_id}/histories`
-- **Auth:** API key passed as the `key` query parameter; account/geo passed as headers.
-- **Projection used:** `["fuel_level","ble_temperatures","speed","direction"]`
-- **Pagination:** the app pages through results in 10,000-record chunks until an empty / short page is returned.
-- **Where it's wired in code:** `TENDERD_API_BASE_URL`, `TENDERD_ACCOUNT_ID`, `TENDERD_GEO` constants in [`app.py`](app.py). The API key is read from secrets (`TENDERD_API_KEY`).
 
 ---
 
@@ -178,13 +256,15 @@ The app is deployed on **Streamlit Community Cloud** and auto-redeploys on push 
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Dropdown is empty | n8n webhook returned no rows, or webhook URL has rotated. | Open the [n8n workflow](https://tenderd-io.app.n8n.cloud/workflow/mI5H7h3aHDQ4bHAQ) → check that it's **Active** (toggle top-right) and that the test execution returns a non-empty array. If the webhook URL changed, update `WEBHOOK_URL` in `app.py`. |
+| Dropdown is empty | n8n returned no active rows, or the webhook URL has rotated. | Open the [n8n workflow](https://tenderd-io.app.n8n.cloud/workflow/mI5H7h3aHDQ4bHAQ) → confirm it is **Active** (toggle top-right) and that a test execution returns a non-empty array. If the webhook URL changed, update `WEBHOOK_URL` in `app.py`. |
+| Vehicle disappeared from the dropdown | Operator un-marked it in the sheet, or the row was removed. | Expected — confirm with the operator. If unexpected, check the sheet directly via the workflow. |
+| A vehicle the operator just added isn't showing yet | 5-minute webhook cache. | Click **Refresh Data** in the sidebar — calls `st.cache_data.clear()` and re-runs the webhook immediately. |
 | `TENDERD_API_KEY not found` | Secret missing. | Add it to `.streamlit/secrets.toml` locally or to **Secrets** in Streamlit Cloud. |
-| "No location history is available for this vehicle" | Tenderd API returned no pings between `time_added` and now (vehicle offline, device wrong, etc.). | Sanity-check by calling the endpoint directly: `GET https://telematics-svc-dr.tenderd.io/telematics/devices/<device_id>/histories` with the same headers and a recent date range. |
+| "No location history is available for this vehicle" | Tenderd API returned no pings between `time_added` and now (vehicle offline, wrong device id, etc.). | Sanity-check by calling Tenderd directly: `GET https://telematics-svc-dr.tenderd.io/telematics/devices/<device_id>/histories` with the same headers and a recent date range. |
+| Customer says the map is "stuck" / not updating | Streamlit doesn't auto-poll. | Refreshing the page re-runs both webhook + Tenderd calls. The "Last Updated" stat reflects the most recent ping returned. |
 | App shows in dark mode | `.streamlit/config.toml` missing or overridden. | Confirm the file exists with `[theme]` `base = "light"`. |
-| Long-running vehicle crashes the "Last 24h" table | Unlikely after the 24h-scoping fix, but a >24h-of-high-frequency vehicle could still grow large. | The table already scopes to 24h; if you raise that window, also replace the `column_config` formatters with custom pagination. |
 
-A quick webhook smoke test from the CLI:
+A quick webhook smoke test from the CLI (returns whatever n8n currently considers "active"):
 
 ```bash
 curl -s "https://tenderd-io.app.n8n.cloud/webhook/89b4621a-5e8a-4a4b-a2ed-40f1aaf2e2cf" | head -200
@@ -192,6 +272,10 @@ curl -s "https://tenderd-io.app.n8n.cloud/webhook/89b4621a-5e8a-4a4b-a2ed-40f1aa
 
 ---
 
-## Sharing / stop-sharing a vehicle
+## Glossary
 
-This app **does not** add or remove vehicles from the tracked list — that's done in the n8n workflow. To start or stop sharing a vehicle, open the [n8n workflow](https://tenderd-io.app.n8n.cloud/workflow/mI5H7h3aHDQ4bHAQ) and use the start/stop forms inside it. Within ~5 minutes (webhook cache TTL) the change is reflected in the app; clicking **Refresh Data** in the sidebar forces an immediate refetch.
+- **Intergolf** — the operator of the vehicles; the one managing the spreadsheet.
+- **Customer (e.g. DHL)** — the recipient of the share link; sees only the one vehicle the link points at.
+- **Tenderd** — the telematics platform the vehicles report to; source of GPS data.
+- **n8n workflow** — middleware that translates Intergolf's spreadsheet into the JSON the app expects.
+- **`time_added`** — the timestamp Intergolf assigns when adding a vehicle to the share. Becomes the start of the history window the customer can see.
