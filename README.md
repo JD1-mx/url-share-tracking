@@ -264,11 +264,6 @@ The app is deployed on **Streamlit Community Cloud** and auto-redeploys on push 
 | Customer says the map is "stuck" / not updating | Streamlit doesn't auto-poll. | Refreshing the page re-runs both webhook + Tenderd calls. The "Last Updated" stat reflects the most recent ping returned. |
 | App shows in dark mode | `.streamlit/config.toml` missing or overridden. | Confirm the file exists with `[theme]` `base = "light"`. |
 
-A quick webhook smoke test from the CLI (returns whatever n8n currently considers "active"):
-
-```bash
-curl -s "https://tenderd-io.app.n8n.cloud/webhook/89b4621a-5e8a-4a4b-a2ed-40f1aaf2e2cf" | head -200
-```
 
 ---
 
