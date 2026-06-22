@@ -1,6 +1,6 @@
 # Vehicle Tracking System
 
-A Streamlit app that lets **Intergulf** share a live tracking link with their customers (e.g. **DHL**), so the customer can see where the Intergolf vehicle handling their job is at any time — without giving them access to Tenderd directly.
+A Streamlit app that lets **Intergulf** share a live tracking link with their customers (e.g. **DHL**), so the customer can see where the intergulf vehicle handling their job is at any time — without giving them access to Tenderd directly.
 
 **Production URL:** https://track-with-tenderd.streamlit.app/
 **Shareable deep-link format:** `https://track-with-tenderd.streamlit.app/?device_id=<DEVICE_ID>`
@@ -9,25 +9,25 @@ A Streamlit app that lets **Intergulf** share a live tracking link with their cu
 
 ## Why this exists (context)
 
-Intergolf runs vehicles on behalf of multiple customers, and the assignment of "which vehicle is on which customer's job" changes often. When DHL (or any other Intergolf customer) wants visibility into the vehicle running *their* shipment, Intergolf needs a way to:
+intergulf runs vehicles on behalf of multiple customers, and the assignment of "which vehicle is on which customer's job" changes often. When DHL (or any other intergulf customer) wants visibility into the vehicle running *their* shipment, intergulf needs a way to:
 
 1. Decide *this* specific vehicle is the one DHL should see.
 2. Decide *from when* it should be visible (usually the moment the job starts).
 3. Share a single URL with DHL that just works — no login, no Tenderd access.
 4. Pull that vehicle off the share later, once the job is over.
 
-This app is the customer-facing surface of that flow. The decision of *which vehicles are currently shared* is **not** managed here — it's managed by Intergolf in a spreadsheet, glued to this app by an n8n workflow.
+This app is the customer-facing surface of that flow. The decision of *which vehicles are currently shared* is **not** managed here — it's managed by intergulf in a spreadsheet, glued to this app by an n8n workflow.
 
 ---
 
 ## End-to-end flow
 
-There are two people in the loop: **the Intergolf operator** (manages the list) and **the customer** (consumes the link).
+There are two people in the loop: **the intergulf operator** (manages the list) and **the customer** (consumes the link).
 
-### Intergolf operator — managing the shared list
+### intergulf operator — managing the shared list
 
-1. Operator opens **Intergolf's fleet spreadsheet** (referenced from inside the n8n workflow below — *do not* hardcode it elsewhere; treat n8n as the source of truth).
-2. The sheet has one row per vehicle Intergolf operates, with at least:
+1. Operator opens **intergulf's fleet spreadsheet** (referenced from inside the n8n workflow below — *do not* hardcode it elsewhere; treat n8n as the source of truth).
+2. The sheet has one row per vehicle intergulf operates, with at least:
    - `device_id` — the Tenderd device identifier.
    - `plate_number` — the human-readable plate.
    - `time_added` — the moment from which the vehicle should start being visible to the customer (this also becomes the lower bound of the location history the customer sees).
@@ -69,7 +69,7 @@ There are two people in the loop: **the Intergolf operator** (manages the list) 
         ┌──────────────────────────────┐   ┌──────────────────────────────┐
         │  n8n workflow                │   │  Tenderd telematics API      │
         │  • triggered by the webhook  │   │  • returns GPS pings between │
-        │  • reads Intergolf's sheet   │   │    time_added and now        │
+        │  • reads intergulf's sheet   │   │    time_added and now        │
         │  • filters to active rows    │   │  • paginated                 │
         │  • returns [{device_id,      │   └──────────────────────────────┘
         │    plate_number, time_added}]│
@@ -87,7 +87,7 @@ The webhook response is cached in Streamlit for **5 minutes** (`@st.cache_data(t
 The list of vehicles currently visible in the app is decided by an n8n workflow. The workflow:
 
 - Is triggered by a GET webhook (called every time the Streamlit app fetches the list).
-- Reads Intergolf's spreadsheet.
+- Reads intergulf's spreadsheet.
 - Filters down to the rows the operator has marked active.
 - Returns `[{device_id, plate_number, time_added}, …]` as JSON.
 
@@ -274,8 +274,8 @@ curl -s "https://tenderd-io.app.n8n.cloud/webhook/89b4621a-5e8a-4a4b-a2ed-40f1aa
 
 ## Glossary
 
-- **Intergolf** — the operator of the vehicles; the one managing the spreadsheet.
+- **intergulf** — the operator of the vehicles; the one managing the spreadsheet.
 - **Customer (e.g. DHL)** — the recipient of the share link; sees only the one vehicle the link points at.
 - **Tenderd** — the telematics platform the vehicles report to; source of GPS data.
-- **n8n workflow** — middleware that translates Intergolf's spreadsheet into the JSON the app expects.
-- **`time_added`** — the timestamp Intergolf assigns when adding a vehicle to the share. Becomes the start of the history window the customer can see.
+- **n8n workflow** — middleware that translates intergulf's spreadsheet into the JSON the app expects.
+- **`time_added`** — the timestamp intergulf assigns when adding a vehicle to the share. Becomes the start of the history window the customer can see.
